@@ -1,0 +1,64 @@
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name ${SERVER_NAME} www.${SERVER_NAME};
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    include /var/www/docker/nginx/config/snippets/self-signed.conf;
+    include /var/www/docker/nginx/config/snippets/ssl-params.conf;
+
+    root /var/www/public;
+    index index.php;
+
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    client_max_body_size 200M;
+
+    # display maintenance page if laravel app is down
+    if ( -f /var/www/current/storage/framework/down ) {
+        return 503;
+    }
+
+    include /var/www/docker/nginx/config/snippets/pma.conf;
+    include /var/www/docker/nginx/config/snippets/redis-insight.conf;
+
+    server_name ${SERVER_NAME} www.${SERVER_NAME};
+
+    location ~ \.php$ {
+        fastcgi_intercept_errors off;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        include fastcgi_params;
+        fastcgi_pass app:9000;
+        fastcgi_index index.php;
+        fastcgi_connect_timeout 60;
+        fastcgi_send_timeout 300;
+        fastcgi_read_timeout 120;
+        keepalive_timeout 300;
+        fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+
+        proxy_buffer_size          128k;
+        proxy_buffers              4 256k;
+        proxy_busy_buffers_size    256k;
+        fastcgi_buffer_size        16k;
+        fastcgi_buffers            4 16k;
+    }
+
+    location ~* \.(gif|jpe?g|png|svg|webp|eot|ttf|woff|woff2|js|css)(\?.*)?$ {
+        expires 2y;
+        add_header Pragma public;
+        add_header Cache-Control "public, immutable";
+        add_header Access-Control-Allow-Origin *;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+        gzip_static on;
+    }
+}

@@ -1,0 +1,132 @@
+version: '3.9'
+services:
+  app:
+    container_name: 'test'
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile
+      args:
+        USER_ID: ${CUR_USER_ID:-1000}
+        GROUP_ID: ${CUR_GROUP_ID:-1000}
+        USER_NAME: ${CUR_USER_NAME:-nonroot}
+        PHP_VERSION: ${PHP_VERSION:-8.1-fpm}
+    image: test/app
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    environment:
+      XDEBUG_MODE: '${XDEBUG_MODE:-off}'
+    volumes:
+      - .:/var/www:delegated
+      - ./docker/php/config/php.ini:/usr/local/etc/php/conf.d/99-local.ini:ro,cached
+      - ./docker/php/config/xdebug.ini:/usr/local/etc/php/conf.d/docker-php-ext-xdebug.ini:ro,cached
+      - ./docker/php/config/opcache.ini:/usr/local/etc/php/conf.d/99-opcache.ini:ro,cached
+      - ./docker/php/config/zz-www.conf:/usr/local/etc/php-fpm.d/99-zz-www.conf:ro,cached
+      - composer-cache:/home/${CUR_USER_NAME:-nonroot}/.composer,cached
+    networks:
+      - test
+    depends_on:
+      - mysql
+      - redis
+  mysql:
+    container_name: 'test_db'
+    image: 'mysql/mysql-server:8.0'
+    ports:
+      - '${FORWARD_DB_PORT:-3306}:3306'
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ALLOW_EMPTY_PASSWORD: 1
+    volumes:
+      - 'test-mysql:/var/lib/mysql'
+      - ./docker/mysql/my.cnf:/etc/mysql/conf.d/my.cnf:ro,cached
+    networks:
+      - test
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-p${DB_PASSWORD}" ]
+      retries: 3
+      timeout: 5s
+  mysql-testing:
+    container_name: 'test_test_db'
+    image: 'mysql/mysql-server:8.0'
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_HOST: '%'
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ALLOW_EMPTY_PASSWORD: 1
+    volumes:
+      - test-mysql-testing:/var/lib/mysql
+    networks:
+      - test
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-p${DB_PASSWORD}" ]
+      retries: 3
+      timeout: 5s
+  redis:
+    container_name: 'test_redis'
+    image: 'redis/redis-stack:latest'
+    volumes:
+      - 'test-redis:/data'
+      - ./docker/redis/redis.conf:/redis-stack.conf
+    networks:
+      - test
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      retries: 3
+      timeout: 5s
+  nginx:
+    image: nginx:stable-alpine
+    container_name: 'test_nginx'
+    restart: unless-stopped
+    environment:
+      WWWUSER: ${WWWUSER:-nonroot}
+    ports:
+      - ${FORWARD_HTTP_PORT:-8000}:80
+      - ${FORWARD_HTTPS_PORT:-4430}:443
+    volumes:
+      - ./:/var/www:delegated
+      - ./docker/nginx/config/conf.d:/etc/nginx/conf.d:ro,cached
+      - ./docker/nginx/data/logs:/var/log/nginx:delegated
+      - ./docker/nginx/data/cache:/var/cache/nginx:delegated
+      - ./docker/nginx/config/pma_pass:/etc/nginx/pma_pass:ro
+      - ./docker/nginx/config/redis_pass:/etc/nginx/redis_pass:ro
+    depends_on:
+      - app
+      - phpmyadmin
+      - redis
+    networks:
+      - test
+
+  phpmyadmin:
+    container_name: 'test_pma'
+    image: phpmyadmin/phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_ARBITRARY: 1
+      PMA_ABSOLUTE_URI: ${APP_URL}/pma/
+    links:
+      - mysql:mysql
+    volumes:
+      - ./docker/pma/pma_secure.php:/etc/phpmyadmin/pma_secure.php
+    networks:
+      - test
+networks:
+  test:
+    name: test_app
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: ${SUBNET:-192.168.110.0/28}
+volumes:
+  test-mysql:
+    driver: local
+  test-mysql-testing:
+    driver: local
+  test-redis:
+    driver: local
+  composer-cache:
+    driver: local
